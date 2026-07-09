@@ -247,9 +247,8 @@ export default function StudioPage() {
       </main>
 
       {/* File picker modal */}
-      {selectedFeature && (
+      {selectedFeature && showFilePicker && (
         <FilePickerModal
-          isOpen={showFilePicker}
           onClose={() => {
             setShowFilePicker(false);
             setSelectedFeature(null);

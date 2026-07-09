@@ -10,23 +10,25 @@ interface UploadedFile {
 }
 
 interface FilePickerModalProps {
-  isOpen: boolean;
   onClose: () => void;
   featureType: string;
   onConfirm: (fileId: string, fileName: string) => void;
 }
 
+const DEMO_FILES: UploadedFile[] = [
+  { id: "demo-1", name: "project-proposal.pdf", size: "245.3 KB" },
+  { id: "demo-2", name: "research-paper.txt", size: "89.7 KB" },
+  { id: "demo-3", name: "meeting-notes.md", size: "12.4 KB" },
+];
+
 export function FilePickerModal({
-  isOpen,
   onClose,
   featureType,
   onConfirm,
 }: FilePickerModalProps) {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [files, setFiles] = useState<UploadedFile[]>(DEMO_FILES);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  if (!isOpen) return null;
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploaded = e.target.files?.[0];
