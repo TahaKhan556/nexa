@@ -1,4 +1,5 @@
 """NotebookLM Studio automation for audio/video/mindmap generation."""
+import asyncio
 import json
 import logging
 import subprocess
@@ -31,7 +32,6 @@ class GenerationStatus(str, Enum):
     FAILED = "failed"
 
 
-# In-memory job queue (simple dict for now)
 _jobs = {}
 
 
@@ -96,6 +96,31 @@ async def _cdp_eval(expr: str) -> str:
     return result.get("result", {}).get("result", {}).get("value", "")
 
 
+async def _cdp_eval_async(expr: str) -> str:
+    """Evaluate async JavaScript in the browser context (awaits Promises)."""
+    import websockets
+
+    targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/list").read())
+    ws_url = None
+    for t in targets:
+        if "notebooklm" in t.get("url", "").lower():
+            ws_url = t.get("webSocketDebuggerUrl")
+            break
+    if not ws_url:
+        info = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version").read())
+        ws_url = info.get("webSocketDebuggerUrl")
+    if not ws_url:
+        return ""
+
+    async with websockets.connect(ws_url, close_timeout=10, ping_timeout=60) as ws:
+        msg = {"id": 1, "method": "Runtime.evaluate", "params": {
+            "expression": expr,
+            "awaitPromise": True,
+        }}
+        await ws.send(json.dumps(msg))
+        return json.loads(await ws.recv()).get("result", {}).get("result", {}).get("value", "")
+
+
 async def navigate_to_notebook(notebook_id: str) -> bool:
     """Navigate to a specific notebook."""
     notebook_url = f"https://notebooklm.google.com/notebook/{notebook_id}"
@@ -105,99 +130,407 @@ async def navigate_to_notebook(notebook_id: str) -> bool:
         logger.info(f"Navigating: {url}")
 
         if notebook_id in url:
+            time.sleep(3)
             return True
 
         await _cdp_eval(f"window.location.href = '{notebook_url}'")
-        time.sleep(3)
+        time.sleep(5)
 
     return False
+
+
+async def check_notebook_has_sources() -> bool:
+    """Check if the current notebook has any sources."""
+    result = await _cdp_eval("""
+        (function() {
+            var text = document.body.innerText;
+            if (text.includes("Saved sources will appear here")) return "no_sources";
+            if (text.includes("Add source") || text.includes("Add sources")) return "has_add_button";
+            return "unknown";
+        })()
+    """)
+    logger.info(f"Source check: {result}")
+    return result != "no_sources"
+
+
+async def add_text_source(text: str) -> bool:
+    """Add a text source to the notebook via Copied Text dialog."""
+    # Click Sources tab first
+    await _cdp_eval("""
+        (function() {
+            var tabs = document.querySelectorAll("[role='tab']");
+            for (var tab of tabs) {
+                if (tab.textContent.trim() === "Sources") {
+                    tab.click();
+                    return "clicked";
+                }
+            }
+            return "not found";
+        })()
+    """)
+    time.sleep(2)
+
+    # Click "Add sources" button
+    result = await _cdp_eval("""
+        (function() {
+            var buttons = document.querySelectorAll("button");
+            for (var btn of buttons) {
+                var text = btn.textContent.trim();
+                if (text.includes("Add source")) {
+                    btn.click();
+                    return "clicked add source";
+                }
+            }
+            return "not found";
+        })()
+    """)
+    logger.info(f"Add source button: {result}")
+    time.sleep(2)
+
+    # Click "Copied text" option
+    result = await _cdp_eval("""
+        (function() {
+            var buttons = document.querySelectorAll("button");
+            for (var btn of buttons) {
+                var text = btn.textContent.trim();
+                if (text.includes("Copied text")) {
+                    btn.click();
+                    return "clicked copied text";
+                }
+            }
+            return "not found";
+        })()
+    """)
+    logger.info(f"Copied text button: {result}")
+    time.sleep(2)
+
+    # Paste text into the textarea
+    escaped_text = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+    result = await _cdp_eval(f"""
+        (function() {{
+            var textareas = document.querySelectorAll("textarea");
+            for (var ta of textareas) {{
+                if (ta.placeholder === "Paste text here" && ta.offsetParent !== null) {{
+                    ta.focus();
+                    ta.value = '{escaped_text}';
+                    ta.dispatchEvent(new Event("input", {{bubbles: true}}));
+                    ta.dispatchEvent(new Event("change", {{bubbles: true}}));
+                    return "text pasted, length=" + ta.value.length;
+                }}
+            }}
+            return "textarea not found";
+        }})()
+    """)
+    logger.info(f"Text paste: {result}")
+    time.sleep(1)
+
+    # Click "Insert" button
+    result = await _cdp_eval("""
+        (function() {
+            var buttons = document.querySelectorAll("button");
+            for (var btn of buttons) {
+                if (btn.textContent.trim() === "Insert") {
+                    btn.click();
+                    return "clicked insert";
+                }
+            }
+            return "not found";
+        })()
+    """)
+    logger.info(f"Insert button: {result}")
+    time.sleep(5)
+
+    return "clicked" in result
 
 
 async def click_studio_tab() -> bool:
     """Click the Studio tab in the NotebookLM interface."""
     result = await _cdp_eval("""
         (function() {
-            // Look for Studio tab/button
-            var elements = document.querySelectorAll('[role="tab"], button, a');
-            for (var el of elements) {
-                var text = el.textContent.toLowerCase();
-                if (text.includes('studio')) {
-                    el.click();
-                    return 'clicked studio';
+            var tabs = document.querySelectorAll("[role='tab']");
+            for (var tab of tabs) {
+                if (tab.textContent.trim() === "Studio") {
+                    tab.click();
+                    return "clicked Studio";
                 }
             }
-            // Try looking for the Studio section in the right panel
-            var panels = document.querySelectorAll('[class*="studio"], [class*="Studio"]');
-            if (panels.length > 0) {
-                return 'studio panel found';
-            }
-            return 'no studio tab';
+            return "not found";
         })()
     """)
     logger.info(f"Studio tab: {result}")
-    return result != 'no studio tab'
+    return "clicked" in result
 
 
-async def select_audio_format(format_type: str = "brief") -> bool:
-    """Select audio format (brief, deep_dive, critique, debate)."""
-    format_map = {
-        "brief": "the brief",
-        "deep_dive": "deep dive",
-        "critique": "the critique",
-        "debate": "the debate"
-    }
-    target_format = format_map.get(format_type, "the brief")
-
-    result = await _cdp_eval(f"""
-        (function() {{
-            // Look for format selector
-            var elements = document.querySelectorAll('button, [role="option"], [role="menuitem"]');
-            for (var el of elements) {{
-                var text = el.textContent.toLowerCase();
-                if (text.includes('{target_format}')) {{
-                    el.click();
-                    return 'clicked ' + '{target_format}';
-                }}
-            }}
-            return 'format not found';
-        }})()
-    """)
-    logger.info(f"Audio format: {result}")
-    return 'clicked' in result
-
-
-async def click_generate_button() -> bool:
-    """Click the Generate button to start audio/video generation."""
+async def click_audio_overview() -> bool:
+    """Click the Audio Overview button in the Studio panel."""
     result = await _cdp_eval("""
         (function() {
-            // Look for Generate button
-            var buttons = document.querySelectorAll('button');
-            for (var btn of buttons) {
-                var text = btn.textContent.toLowerCase();
-                if (text.includes('generate') || text.includes('create')) {
-                    btn.click();
-                    return 'clicked generate';
-                }
-            }
-            // Try aria-label
-            var btn = document.querySelector('button[aria-label*="Generate"]');
+            var btn = document.querySelector("div[role='button'][aria-label='Audio Overview']");
             if (btn) {
                 btn.click();
-                return 'clicked aria generate';
+                return "clicked Audio Overview";
             }
-            return 'no generate button';
+            return "not found";
         })()
     """)
-    logger.info(f"Generate button: {result}")
-    return 'clicked' in result
+    logger.info(f"Audio Overview: {result}")
+    return "clicked" in result
 
 
-async def wait_for_audio_player(timeout: int = 300) -> Optional[str]:
-    """Wait for audio player to appear and extract the audio URL."""
+async def _fetch_blob_as_base64(blob_url: str) -> Optional[str]:
+    """Fetch a blob URL in the browser and return base64-encoded data."""
+    result = await _cdp_eval_async(f"""
+        (async function() {{
+            try {{
+                var resp = await fetch('{blob_url}');
+                var blob = await resp.blob();
+                return await new Promise(function(resolve, reject) {{
+                    var reader = new FileReader();
+                    reader.onloadend = function() {{
+                        // result is "data:audio/mpeg;base64,XXXX..."
+                        var base64 = reader.result.split(',')[1];
+                        resolve(base64);
+                    }};
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                }});
+            }} catch(e) {{
+                return '';
+            }}
+        }})()
+    """)
+    return result if result else None
+
+
+async def _download_blob_via_cdp(job_id: str) -> Optional[str]:
+    """Download audio from NotebookLM via CDP by intercepting the download click analytics."""
+    import websockets
+    import base64 as b64mod
+    from urllib.parse import urlparse, parse_qs
+
+    try:
+        targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/list").read())
+        ws_url = None
+        for t in targets:
+            if "notebooklm" in t.get("url", "").lower() and t.get("type") == "page":
+                ws_url = t.get("webSocketDebuggerUrl")
+                break
+        if not ws_url:
+            return None
+
+        msg_id = 1000
+
+        async with websockets.connect(ws_url, close_timeout=5, ping_timeout=30) as ws:
+            # 1. Set download behavior
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Browser.setDownloadBehavior", "params": {
+                "behavior": "allow",
+                "downloadPath": str(STUDIO_STORAGE),
+                "eventsEnabled": True,
+            }}))
+            await ws.recv()
+
+            # 2. Click Studio tab to make audio player visible
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": """
+                (function() {
+                    var tabs = document.querySelectorAll('[role="tab"]');
+                    for (var t of tabs) {
+                        if (t.textContent.trim() === 'Studio') {
+                            t.click();
+                            return 'clicked Studio';
+                        }
+                    }
+                    return 'Studio tab not found';
+                })()
+            """}}))
+            while True:
+                r = json.loads(await ws.recv())
+                if r.get("id") == msg_id:
+                    break
+            time.sleep(2)
+
+            # 3. Inject fetch interceptor to capture analytics URLs
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": """
+                (function() {
+                    window._audioUrls = [];
+                    var origFetch = window.fetch;
+                    window.fetch = function() {
+                        var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0].url || '');
+                        window._audioUrls.push(url);
+                        return origFetch.apply(this, arguments);
+                    };
+                    return 'ok';
+                })()
+            """}}))
+            await ws.recv()
+
+            # 4. Click play button to make audio player visible
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": """
+                (function() {
+                    var plays = document.querySelectorAll("button[aria-label='Play']");
+                    if (plays.length > 0) {
+                        plays[0].click();
+                        return 'clicked play';
+                    }
+                    return 'no play button';
+                })()
+            """}}))
+            while True:
+                r = json.loads(await ws.recv())
+                if r.get("id") == msg_id:
+                    break
+            time.sleep(3)
+
+            # 5. Click "More options" on audio player
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": """
+                (function() {
+                    var btns = document.querySelectorAll('button');
+                    for (var b of btns) {
+                        if (b.getAttribute('aria-label') === 'See more options for audio player') {
+                            b.click();
+                            return 'ok';
+                        }
+                    }
+                    return 'not found';
+                })()
+            """}}))
+            retry_count = 0
+            while True:
+                r = json.loads(await ws.recv())
+                if r.get("id") == msg_id:
+                    more_result = r.get("result", {}).get("result", {}).get("value", "")
+                    if more_result == "not found" and retry_count < 5:
+                        logger.info("Audio player not found, waiting...")
+                        retry_count += 1
+                        time.sleep(2)
+                        msg_id += 1
+                        await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": """
+                            (function() {
+                                var btns = document.querySelectorAll('button');
+                                for (var b of btns) {
+                                    if (b.getAttribute('aria-label') === 'See more options for audio player') {
+                                        b.click();
+                                        return 'ok';
+                                    }
+                                }
+                                return 'not found';
+                            })()
+                        """}}))
+                        continue
+                    break
+            time.sleep(2)
+
+            # 5. Click Download
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": """
+                (function() {
+                    var items = document.querySelectorAll('[role="menuitem"], mat-menu-item');
+                    for (var m of items) {
+                        if (m.textContent.trim().toLowerCase().includes('download')) {
+                            m.click();
+                            return 'ok';
+                        }
+                    }
+                    return 'not found';
+                })()
+            """}}))
+            while True:
+                r = json.loads(await ws.recv())
+                if r.get("id") == msg_id:
+                    break
+
+            # 6. Wait for analytics request and extract audio URL
+            time.sleep(3)
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Runtime.evaluate", "params": {"expression": "JSON.stringify(window._audioUrls || [])"}}))
+            while True:
+                r = json.loads(await ws.recv())
+                if r.get("id") == msg_id:
+                    all_urls = json.loads(r["result"]["result"]["value"])
+                    break
+
+            # Extract audio URL from analytics link_url parameter
+            audio_url = None
+            for url in all_urls:
+                if "analytics" in url and "link_url" in url:
+                    parsed = urlparse(url)
+                    params = parse_qs(parsed.query)
+                    link_url = params.get("ep.link_url", params.get("link_url", [""]))[0]
+                    if link_url and ("googleapis.com" in link_url or "gstatic.com" in link_url or "googleusercontent.com" in link_url):
+                        audio_url = link_url
+                        break
+
+            if not audio_url:
+                logger.info("No audio URL found in analytics")
+                return None
+
+            logger.info(f"Found audio URL: {audio_url[:80]}...")
+
+            # 7. Enable Network on main page to capture events
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Network.enable", "params": {}}))
+            await ws.recv()
+
+            # 8. Navigate main page to audio URL (triggers download via redirect)
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Page.navigate", "params": {"url": audio_url}}))
+
+            # 9. Wait for download to complete
+            download_guid = None
+            start = time.time()
+            while time.time() - start < 120:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=2)
+                    event = json.loads(raw)
+                    method = event.get("method", "")
+
+                    if method == "Browser.downloadWillBegin":
+                        download_guid = event["params"].get("guid", "")
+                        logger.info(f"Download started: {download_guid}")
+
+                    elif method == "Browser.downloadProgress":
+                        state = event["params"].get("state", "")
+                        received = event["params"].get("receivedBytes", 0)
+                        total = event["params"].get("totalBytes", 0)
+                        if state == "completed":
+                            filepath = event["params"].get("filePath", "")
+                            logger.info(f"Download completed: {filepath} ({received} bytes)")
+                            import shutil
+                            ext = Path(filepath).suffix if Path(filepath).suffix else ".m4a"
+                            new_path = STUDIO_STORAGE / f"{job_id}{ext}"
+                            shutil.move(filepath, new_path)
+                            logger.info(f"Renamed to: {new_path}")
+                            return f"/api/studio/audio/{job_id}"
+                        elif received > 0 and total > 0:
+                            pct = int(received / total * 100)
+                            logger.info(f"Download progress: {pct}% ({received}/{total})")
+
+                except asyncio.TimeoutError:
+                    continue
+
+            # Navigate back to NotebookLM on timeout
+            logger.warning("Download timed out, navigating back to NotebookLM")
+            notebook_url = "https://notebooklm.google.com"
+            msg_id += 1
+            await ws.send(json.dumps({"id": msg_id, "method": "Page.navigate", "params": {"url": notebook_url}}))
+
+    except Exception as e:
+        logger.error(f"CDP download failed: {e}")
+
+    return None
+
+
+async def wait_for_audio_player(timeout: int = 900, job_id: str = None) -> Optional[str]:
+    """Wait for audio player to appear and extract/download the audio."""
     start = time.time()
+    generating_seen = False
 
     while time.time() - start < timeout:
-        time.sleep(5)
+        time.sleep(10)
 
         # Check for audio element
         audio_url = await _cdp_eval("""
@@ -206,20 +539,13 @@ async def wait_for_audio_player(timeout: int = 300) -> Optional[str]:
                 var audio = document.querySelector('audio');
                 if (audio) {
                     if (audio.src) return audio.src;
-                    // Check source elements inside audio
                     var sources = audio.querySelectorAll('source');
                     for (var src of sources) {
                         if (src.src) return src.src;
                     }
                 }
                 
-                // Check for any audio source elements anywhere
-                var allSources = document.querySelectorAll('audio source, source[type*="audio"]');
-                for (var src of allSources) {
-                    if (src.src) return src.src;
-                }
-                
-                // Check for download links with blob URLs
+                // Check for download links
                 var links = document.querySelectorAll('a[href*="blob:"], a[download], a[aria-label*="download"], a[aria-label*="Download"]');
                 for (var link of links) {
                     if (link.href && (link.href.includes('blob:') || link.href.includes('audio'))) {
@@ -227,20 +553,9 @@ async def wait_for_audio_player(timeout: int = 300) -> Optional[str]:
                     }
                 }
                 
-                // Check for play buttons that might indicate audio is ready
-                var playButtons = document.querySelectorAll('button[aria-label*="play"], button[aria-label*="Play"], [class*="play"]');
+                // Check for play buttons
+                var playButtons = document.querySelectorAll('button[aria-label*="play"], button[aria-label*="Play"]');
                 if (playButtons.length > 0) {
-                    // Look for nearby audio source
-                    for (var btn of playButtons) {
-                        var container = btn.closest('[class*="audio"], [class*="player"]');
-                        if (container) {
-                            var audioInContainer = container.querySelector('audio, source');
-                            if (audioInContainer && audioInContainer.src) {
-                                return audioInContainer.src;
-                            }
-                        }
-                    }
-                    // Return a marker that audio is ready
                     return 'audio_ready_marker';
                 }
                 
@@ -251,244 +566,67 @@ async def wait_for_audio_player(timeout: int = 300) -> Optional[str]:
         if audio_url:
             if audio_url == 'audio_ready_marker':
                 logger.info("Audio player detected (play button found)")
-                # Try to extract the actual URL from the player
-                actual_url = await _cdp_eval("""
-                    (function() {
-                        var audio = document.querySelector('audio');
-                        if (audio && audio.src) return audio.src;
-                        var sources = document.querySelectorAll('source');
-                        for (var src of sources) {
-                            if (src.src) return src.src;
-                        }
-                        return '';
-                    })()
-                """)
-                if actual_url:
-                    return actual_url
-                # If we can't get URL, return a success marker
+                # Try to download the audio via CDP
+                if job_id:
+                    downloaded_url = await _download_blob_via_cdp(job_id)
+                    if downloaded_url:
+                        return downloaded_url
                 return 'audio_generated'
-            
+
+            if audio_url.startswith('blob:'):
+                logger.info(f"Blob URL detected: {audio_url[:80]}...")
+                if job_id:
+                    downloaded_url = await _download_blob_via_cdp(job_id)
+                    if downloaded_url:
+                        return downloaded_url
+                return 'audio_generated'
+
             logger.info(f"Audio URL found: {audio_url[:100]}...")
             return audio_url
 
-        # Check if still generating
+        # Check status
         status = await _cdp_eval("""
             (function() {
                 var text = document.body.innerText;
-                if (text.includes('Generating') || text.includes('Loading') || text.includes('Processing') || text.includes('Creating')) {
-                    return 'generating';
-                }
-                // Check for audio player UI
-                var audioElements = document.querySelectorAll('audio, [class*="audio-player"], [class*="player"]');
-                if (audioElements.length > 0) {
-                    return 'player_found';
-                }
+                if (text.includes('Generating')) return 'generating';
+                if (text.includes('Thinking')) return 'thinking';
+                if (text.includes('Creating')) return 'creating';
                 return 'unknown';
             })()
         """)
-        logger.info(f"Status: {status}")
+        elapsed = int(time.time() - start)
+        logger.info(f"Status: {status} (elapsed: {elapsed}s)")
 
-    return None
-
-
-async def wait_for_video_player(timeout: int = 1800) -> Optional[str]:
-    """Wait for video player to appear and extract the video URL."""
-    start = time.time()
-
-    while time.time() - start < timeout:
-        time.sleep(10)
-
-        # Check for video element
-        video_url = await _cdp_eval("""
-            (function() {
-                var video = document.querySelector('video');
-                if (video && video.src) {
-                    return video.src;
-                }
-                // Check for video source elements
-                var sources = document.querySelectorAll('video source');
-                for (var src of sources) {
-                    if (src.src) return src.src;
-                }
-                // Check for download links
-                var links = document.querySelectorAll('a[href*="video"], a[download]');
-                for (var link of links) {
-                    if (link.href && link.href.includes('blob:')) {
-                        return link.href;
-                    }
-                }
-                return '';
-            })()
-        """)
-
-        if video_url:
-            logger.info(f"Video URL found: {video_url[:100]}...")
-            return video_url
-
-        # Check if still generating
-        status = await _cdp_eval("""
-            (function() {
-                var text = document.body.innerText;
-                if (text.includes('Generating') || text.includes('Loading') || text.includes('Processing')) {
-                    return 'generating';
-                }
-                return 'unknown';
-            })()
-        """)
-        logger.info(f"Status: {status}")
-
-    return None
-
-
-async def click_mindmap_chip() -> bool:
-    """Click the Mind Map suggestion chip in the chat area."""
-    result = await _cdp_eval("""
-        (function() {
-            // Look for Mind Map chip
-            var chips = document.querySelectorAll('[class*="chip"], [class*="suggestion"], button');
-            for (var chip of chips) {
-                var text = chip.textContent.toLowerCase();
-                if (text.includes('mind map') || text.includes('mindmap')) {
-                    chip.click();
-                    return 'clicked mindmap chip';
-                }
-            }
-            // Try typing "mind map" in the chat input
-            var textarea = document.querySelector('textarea');
-            if (textarea) {
-                textarea.focus();
-                textarea.value = 'Create a mind map';
-                textarea.dispatchEvent(new Event('input', {bubbles: true}));
-                return 'typed mindmap request';
-            }
-            return 'no mindmap chip';
-        })()
-    """)
-    logger.info(f"Mind Map chip: {result}")
-    
-    # If we typed the request, submit it
-    if 'typed' in result:
-        await _cdp_eval("""
-            (function() {
-                var btn = document.querySelector('button[aria-label="Submit"]');
-                if (btn) { btn.click(); return 'clicked'; }
-                return 'no button';
-            })()
-        """)
-        time.sleep(2)
-    
-    return 'clicked' in result or 'typed' in result
-
-
-async def wait_for_mindmap(timeout: int = 120) -> Optional[str]:
-    """Wait for mind map to appear and extract data."""
-    start = time.time()
-
-    while time.time() - start < timeout:
-        time.sleep(3)
-
-        # Try to extract SVG or canvas content
-        mindmap_data = await _cdp_eval("""
-            (function() {
-                // Look for SVG elements (most common)
-                var svgs = document.querySelectorAll('svg');
-                for (var svg of svgs) {
-                    // Skip small icons
-                    if (svg.outerHTML.length > 500 && 
-                        (svg.getAttribute('width') || svg.getAttribute('viewBox'))) {
-                        return svg.outerHTML;
-                    }
-                }
-                
-                // Look for mind map container
-                var containers = document.querySelectorAll('[class*="mindmap"], [class*="mind-map"], [class*="diagram"], [class*="graph"]');
-                for (var container of containers) {
-                    var innerSvg = container.querySelector('svg');
-                    if (innerSvg && innerSvg.outerHTML.length > 500) {
-                        return innerSvg.outerHTML;
-                    }
-                    // Check for canvas
-                    var canvas = container.querySelector('canvas');
-                    if (canvas) {
-                        try {
-                            return canvas.toDataURL('image/png');
-                        } catch(e) {}
-                    }
-                }
-                
-                // Look for any large SVG (could be the mind map)
-                var allSvgs = document.querySelectorAll('svg');
-                var largestSvg = null;
-                var maxSize = 0;
-                for (var svg of allSvgs) {
-                    var size = svg.outerHTML.length;
-                    if (size > maxSize && size > 500) {
-                        maxSize = size;
-                        largestSvg = svg;
-                    }
-                }
-                if (largestSvg) {
-                    return largestSvg.outerHTML;
-                }
-                
-                return '';
-            })()
-        """)
-
-        if mindmap_data and len(mindmap_data) > 500:
-            logger.info(f"Mind Map data found ({len(mindmap_data)} chars)")
-            return mindmap_data
+        if status == 'generating':
+            generating_seen = True
         
-        # Check if generation is still in progress
-        status = await _cdp_eval("""
-            (function() {
-                var text = document.body.innerText;
-                if (text.includes('Generating') || text.includes('Loading') || text.includes('Creating')) {
-                    return 'generating';
-                }
-                return 'unknown';
-            })()
-        """)
-        logger.info(f"Mind Map status: {status}")
+        # If we were generating and now it's unknown, generation might be complete
+        if generating_seen and status == 'unknown' and elapsed > 30:
+            logger.info("Generation seems complete, checking for audio...")
+            time.sleep(5)
+            audio_url = await _cdp_eval("""
+                (function() {
+                    var audio = document.querySelector('audio');
+                    if (audio && audio.src) return audio.src;
+                    var playBtns = document.querySelectorAll('button[aria-label*="play"], button[aria-label*="Play"]');
+                    if (playBtns.length > 0) return 'audio_ready_marker';
+                    return '';
+                })()
+            """)
+            if audio_url:
+                if audio_url == 'audio_ready_marker':
+                    if job_id:
+                        downloaded_url = await _download_blob_via_cdp(job_id)
+                        if downloaded_url:
+                            return downloaded_url
+                    return 'audio_generated'
+                if audio_url.startswith('blob:') and job_id:
+                    downloaded_url = await _download_blob_via_cdp(job_id)
+                    if downloaded_url:
+                        return downloaded_url
+                return audio_url
 
     return None
-
-
-async def take_screenshot() -> str:
-    """Take a screenshot of the current page."""
-    import base64
-
-    # Wait a bit for content to render
-    time.sleep(2)
-    
-    # First, try to scroll to the mind map area
-    await _cdp_eval("""
-        (function() {
-            // Look for mind map container and scroll to it
-            var containers = document.querySelectorAll('[class*="mindmap"], [class*="mind-map"], [class*="diagram"]');
-            if (containers.length > 0) {
-                containers[0].scrollIntoView({behavior: 'smooth', block: 'center'});
-                return 'scrolled';
-            }
-            return 'no container';
-        })()
-    """)
-    time.sleep(1)
-    
-    result = await _cdp_send("Page.captureScreenshot", {
-        "format": "png",
-        "captureBeyondViewport": True
-    })
-    
-    if "result" in result and "data" in result["result"]:
-        img_data = base64.b64decode(result["result"]["data"])
-        filename = f"mindmap_{int(time.time())}.png"
-        filepath = STUDIO_STORAGE / filename
-        filepath.write_bytes(img_data)
-        logger.info(f"Screenshot saved: {filepath}")
-        return str(filepath)
-
-    return ""
 
 
 def create_job(job_id: str, notebook_id: str, feature_type: FeatureType) -> dict:

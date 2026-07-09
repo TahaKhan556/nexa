@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -18,9 +18,9 @@ from browser import chat_with_notebooklm
 from db import init_db, save_message, get_history
 from studio import (
     FeatureType, GenerationStatus, _start_browser, navigate_to_notebook,
-    click_studio_tab, select_audio_format, click_generate_button,
-    wait_for_audio_player, wait_for_video_player, click_mindmap_chip,
-    wait_for_mindmap, take_screenshot, create_job, update_job, get_job, _jobs
+    check_notebook_has_sources, add_text_source,
+    click_studio_tab, click_audio_overview,
+    wait_for_audio_player, create_job, update_job, get_job, _jobs
 )
 
 logging.basicConfig(
@@ -181,24 +181,25 @@ async def generate_studio_feature(
             return
 
         if feature_type in [FeatureType.BRIEFING, FeatureType.AUDIO]:
+            # Check if notebook has sources
+            has_sources = await check_notebook_has_sources()
+            if not has_sources:
+                logger.info("Notebook has no sources, adding text source...")
+                source_text = custom_prompt or "General knowledge overview"
+                await add_text_source(source_text)
+                time.sleep(3)
+
+            # Click Studio tab
             await click_studio_tab()
             time.sleep(2)
 
-            # Select audio format
-            format_map = {
-                FeatureType.BRIEFING: "brief",
-                FeatureType.AUDIO: format_type
-            }
-            await select_audio_format(format_map[feature_type])
-            time.sleep(1)
-
-            # Click generate
-            await click_generate_button()
+            # Click Audio Overview button
+            await click_audio_overview()
+            time.sleep(2)
 
             # Wait for audio
-            audio_url = await wait_for_audio_player(timeout=300 if feature_type == FeatureType.BRIEFING else 600)
+            audio_url = await wait_for_audio_player(timeout=600, job_id=job_id)
             if audio_url:
-                # Handle the case where audio is generated but URL not extractable
                 if audio_url == 'audio_generated':
                     update_job(job_id, status=GenerationStatus.READY.value, content_url='audio_generated')
                 else:
@@ -206,26 +207,21 @@ async def generate_studio_feature(
             else:
                 update_job(job_id, status=GenerationStatus.FAILED.value, error="Audio generation timed out")
 
-        elif feature_type == FeatureType.MINDMAP:
-            await click_mindmap_chip()
-            svg_data = await wait_for_mindmap(timeout=120)
-            if svg_data:
-                update_job(job_id, status=GenerationStatus.READY.value, content_url=svg_data)
-            else:
-                # Fallback to screenshot
-                screenshot_path = await take_screenshot()
-                if screenshot_path:
-                    update_job(job_id, status=GenerationStatus.READY.value, content_url=screenshot_path)
-                else:
-                    update_job(job_id, status=GenerationStatus.FAILED.value, error="Mind map generation failed")
-
         elif feature_type == FeatureType.VIDEO:
             await click_studio_tab()
             time.sleep(2)
-            await click_generate_button()
+            # Click Video Overview
+            result = await _cdp_eval("""
+                (function() {
+                    var btn = document.querySelector("div[role='button'][aria-label='Video Overview']");
+                    if (btn) { btn.click(); return "clicked"; }
+                    return "not found";
+                })()
+            """)
+            logger.info(f"Video Overview: {result}")
+            time.sleep(2)
 
-            # Video takes longer
-            video_url = await wait_for_video_player(timeout=1800)
+            video_url = await wait_for_audio_player(timeout=1800)
             if video_url:
                 update_job(job_id, status=GenerationStatus.READY.value, content_url=video_url)
             else:
@@ -243,6 +239,23 @@ async def studio_status(job_id: str):
     if not job:
         return JSONResponse(status_code=404, content={"error": "Job not found"})
     return job
+
+
+@app.get("/api/studio/audio/{job_id}")
+async def serve_audio(job_id: str):
+    """Serve a generated audio file."""
+    from studio import STUDIO_STORAGE
+    # Look for the file with any audio extension
+    for ext in [".m4a", ".mp3", ".wav", ".webm"]:
+        filepath = STUDIO_STORAGE / f"{job_id}{ext}"
+        if filepath.exists():
+            media_type = "audio/mp4" if ext == ".m4a" else "audio/mpeg"
+            return FileResponse(
+                path=str(filepath),
+                media_type=media_type,
+                filename=f"audio_overview_{job_id[:8]}{ext}",
+            )
+    return JSONResponse(status_code=404, content={"error": "Audio file not found"})
 
 
 @app.post("/api/studio/generate")

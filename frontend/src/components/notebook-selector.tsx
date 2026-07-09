@@ -16,27 +16,27 @@ interface NotebookSelectorProps {
 
 const defaultNotebooks: Notebook[] = [
   {
-    id: "a96f0015-76d6-40a9-afbb-3613ecf080ce",
+    id: "34e9d568-5ca8-4844-892c-0c56a5949bfd",
     name: "Science & Technology",
     description: "Physics, CS, AI, engineering",
   },
   {
-    id: "9bfb6427-6813-4ffc-9b24-33991ad2bc92",
+    id: "daaea9d6-8166-46ed-a600-b02319587762",
     name: "History & World Events",
     description: "World history, civilizations",
   },
   {
-    id: "206230a1-94f5-4049-899e-cf6a4ae030f5",
+    id: "81befdb2-9a82-45dd-90db-487f9935dcea",
     name: "Mathematics & Logic",
     description: "Algebra, calculus, statistics",
   },
   {
-    id: "a9c8b9eb-29bf-4514-9287-bb5d9972b695",
+    id: "0dc6371b-5b5d-4056-a2d4-e0693c4abdbf",
     name: "Language & Literature",
     description: "Writing, grammar, literature",
   },
   {
-    id: "36c984fa-2589-4e1c-998e-92657a72daec",
+    id: "3e266742-5bcd-4412-9aba-5d0e0afde3ba",
     name: "Business & Economics",
     description: "Finance, marketing, economics",
   },

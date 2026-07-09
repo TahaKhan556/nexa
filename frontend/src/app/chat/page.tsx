@@ -303,7 +303,12 @@ export default function ChatPage() {
           <AudioPlayer
             src={job.content_url}
             title={job.feature_type === "briefing" ? "Briefing Doc" : "Audio Overview"}
-            onDownload={() => window.open(job.content_url, "_blank")}
+            onDownload={() => {
+              const link = document.createElement("a");
+              link.href = job.content_url!;
+              link.download = `${job.feature_type}_overview.mp3`;
+              link.click();
+            }}
           />
         );
       case "video":
