@@ -19,7 +19,7 @@ from db import init_db, save_message, get_history
 from studio import (
     FeatureType, GenerationStatus, _start_browser, navigate_to_notebook,
     check_notebook_has_sources, add_text_source,
-    click_studio_tab, click_audio_overview,
+    click_studio_tab, click_audio_overview, dismiss_add_sources_dialog,
     wait_for_audio_player, create_job, update_job, get_job, _jobs
 )
 
@@ -182,7 +182,12 @@ async def generate_studio_feature(
 
         if feature_type in [FeatureType.BRIEFING, FeatureType.AUDIO]:
             # Check if notebook has sources
-            has_sources = await check_notebook_has_sources()
+            try:
+                has_sources = await check_notebook_has_sources()
+            except Exception as e:
+                update_job(job_id, status=GenerationStatus.FAILED.value, error=str(e))
+                return
+
             if not has_sources:
                 logger.info("Notebook has no sources, adding text source...")
                 source_text = custom_prompt or "General knowledge overview"
@@ -195,7 +200,20 @@ async def generate_studio_feature(
 
             # Click Audio Overview button
             await click_audio_overview()
-            time.sleep(2)
+            time.sleep(3)
+
+            # Check if an Add Sources dialog appeared (means notebook was still empty)
+            dialog_dismissed = await dismiss_add_sources_dialog()
+            if dialog_dismissed:
+                logger.info("Add Sources dialog was open — notebook had no sources, adding one now...")
+                source_text = custom_prompt or "General knowledge overview"
+                await add_text_source(source_text)
+                time.sleep(3)
+                # Re-click Studio tab and Audio Overview
+                await click_studio_tab()
+                time.sleep(2)
+                await click_audio_overview()
+                time.sleep(3)
 
             # Wait for audio
             audio_url = await wait_for_audio_player(timeout=600, job_id=job_id)

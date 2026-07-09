@@ -146,11 +146,14 @@ async def check_notebook_has_sources() -> bool:
             var text = document.body.innerText;
             if (text.includes("Saved sources will appear here")) return "no_sources";
             if (text.includes("Add source") || text.includes("Add sources")) return "has_add_button";
+            if (text.includes("daily Audio Overview limits")) return "daily_limit";
             return "unknown";
         })()
     """)
     logger.info(f"Source check: {result}")
-    return result != "no_sources"
+    if result == "daily_limit":
+        raise Exception("Daily Audio Overview limit reached. Try again tomorrow.")
+    return result == "has_add_button"
 
 
 async def add_text_source(text: str) -> bool:
@@ -275,6 +278,50 @@ async def click_audio_overview() -> bool:
     """)
     logger.info(f"Audio Overview: {result}")
     return "clicked" in result
+
+
+async def dismiss_add_sources_dialog() -> bool:
+    """Check if an 'Add Sources' dialog appeared and close it."""
+    result = await _cdp_eval("""
+        (function() {
+            // Check for Add Sources dialog
+            var dialogs = document.querySelectorAll('[role="dialog"], .cdk-overlay-pane, .mat-mdc-dialog-container');
+            for (var d of dialogs) {
+                var text = d.innerText || '';
+                if (text.includes("Add") && text.includes("source") || text.includes("Upload") || text.includes("paste")) {
+                    // Found the dialog, click Close
+                    var closeBtn = d.querySelector('button[aria-label="Close"], button');
+                    if (closeBtn) {
+                        closeBtn.click();
+                        return "closed_dialog";
+                    }
+                    // Try escape key
+                    document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', bubbles: true}));
+                    return "sent_escape";
+                }
+            }
+            return "no_dialog";
+        })()
+    """)
+    logger.info(f"Add Sources dialog: {result}")
+    return result.startswith("closed") or result.startswith("sent")
+
+
+async def check_daily_limit() -> bool:
+    """Check if NotebookLM shows a daily limit error."""
+    result = await _cdp_eval("""
+        (function() {
+            var text = document.body.innerText;
+            if (text.includes("daily Audio Overview limits") || text.includes("reached your daily")) {
+                return "limited";
+            }
+            return "ok";
+        })()
+    """)
+    if result == "limited":
+        logger.warning("Daily Audio Overview limit reached!")
+        return True
+    return False
 
 
 async def _fetch_blob_as_base64(blob_url: str) -> Optional[str]:
