@@ -85,10 +85,10 @@ export default function LandingPage() {
           </div>
           <div className="flex items-center gap-4">
             <Link
-              href="/chat"
+              href="/login"
               className="text-sm text-muted-foreground transition-colors hover:text-foreground"
             >
-              Open Chat
+              Log in
             </Link>
             <Link
               href="/chat"

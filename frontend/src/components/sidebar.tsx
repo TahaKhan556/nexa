@@ -7,6 +7,7 @@ import {
   ChevronRight,
   MessageSquare,
   Settings,
+  Sparkles,
   Zap,
 } from "lucide-react";
 import { useState } from "react";
@@ -17,6 +18,11 @@ const navItems = [
     label: "Chat",
     href: "/chat",
     icon: MessageSquare,
+  },
+  {
+    label: "Studio",
+    href: "/studio",
+    icon: Sparkles,
   },
   {
     label: "Status",
