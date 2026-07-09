@@ -1,0 +1,27 @@
+[
+  {
+    "id": "a96f0015-76d6-40a9-afbb-3613ecf080ce",
+    "name": "Science & Technology",
+    "description": "Physics, chemistry, biology, computer science, AI, engineering, space, medicine"
+  },
+  {
+    "id": "9bfb6427-6813-4ffc-9b24-33991ad2bc92",
+    "name": "History & World Events",
+    "description": "World history, civilizations, wars, political events, geography, cultures"
+  },
+  {
+    "id": "206230a1-94f5-4049-899e-cf6a4ae030f5",
+    "name": "Mathematics & Logic",
+    "description": "Algebra, calculus, statistics, logic, problem solving, formulas"
+  },
+  {
+    "id": "a9c8b9eb-29bf-4514-9287-bb5d9972b695",
+    "name": "Language & Literature",
+    "description": "Writing, grammar, literature analysis, communication, languages, poetry"
+  },
+  {
+    "id": "36c984fa-2589-4e1c-998e-92657a72daec",
+    "name": "Business & Economics",
+    "description": "Finance, marketing, management, economics, entrepreneurship, investing"
+  }
+]

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Nexa — NotebookLM Login</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: system-ui; background: #0a0a0f; color: #e4e4e7; min-height:100vh; display:flex; align-items:center; justify-content:center; }
+.card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 40px; max-width: 480px; width: 90%; }
+h1 { font-size: 24px; margin-bottom: 8px; }
+.sub { color: #a1a1aa; font-size: 14px; margin-bottom: 24px; }
+.step { background: #09090b; border: 1px solid #27272a; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.step-num { color: #a78bfa; font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+.step-text { font-size: 14px; line-height: 1.5; }
+code { background: #27272a; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+.btn { background: #7c3aed; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; width: 100%; margin-top: 16px; }
+.btn:hover { background: #6d28d9; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+textarea { width: 100%; height: 200px; background: #09090b; border: 1px solid #27272a; border-radius: 8px; padding: 12px; color: #e4e4e7; font-family: monospace; font-size: 12px; resize: vertical; margin-top: 12px; }
+.status { margin-top: 12px; padding: 12px; border-radius: 8px; font-size: 14px; display: none; }
+.success { background: #052e16; border: 1px solid #166534; color: #4ade80; display: block; }
+.error { background: #450a0a; border: 1px solid #991b1b; color: #f87171; display: block; }
+a { color: #a78bfa; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Nexa Login</h1>
+  <p class="sub">Connect your Google account to NotebookLM</p>
+
+  <div class="step">
+    <div class="step-num">STEP 1</div>
+    <div class="step-text">Install <a href="https://chrome.google.com/webstore/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm" target="_blank">Cookie-Editor</a> Chrome extension</div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">STEP 2</div>
+    <div class="step-text">Go to <a href="https://notebooklm.google.com" target="_blank">notebooklm.google.com</a> and log in with your Google account</div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">STEP 3</div>
+    <div class="step-text">Click Cookie-Editor icon → <strong>Export</strong> → <strong>JSON</strong> → Copy</div>
+  </div>
+
+  <div class="step">
+    <div class="step-num">STEP 4</div>
+    <div class="step-text">Paste the JSON below and click Import</div>
+  </div>
+
+  <textarea id="cookies" placeholder="Paste your exported cookies JSON here..."></textarea>
+  <button class="btn" onclick="importCookies()">Import Cookies</button>
+  <div id="status" class="status"></div>
+</div>
+
+<script>
+async function importCookies() {
+  const data = document.getElementById('cookies').value.trim();
+  const status = document.getElementById('status');
+  const btn = document.querySelector('.btn');
+
+  if (!data) {
+    status.className = 'status error';
+    status.textContent = 'Please paste the cookies JSON first.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Importing...';
+
+  try {
+    const cookies = JSON.parse(data);
+    const res = await fetch('/api/import-cookies', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({cookies: cookies})
+    });
+    const result = await res.json();
+
+    if (result.success) {
+      status.className = 'status success';
+      status.textContent = 'Login successful! Cookies saved. You can now use Nexa chat.';
+    } else {
+      status.className = 'status error';
+      status.textContent = 'Error: ' + (result.error || 'Failed to import cookies');
+    }
+  } catch(e) {
+    status.className = 'status error';
+    status.textContent = 'Invalid JSON: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Import Cookies';
+  }
+}
+</script>
+</body>
+</html>
