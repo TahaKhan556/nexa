@@ -154,6 +154,7 @@ export default function StudioPage() {
                   return (
                     <button
                       key={feature.type}
+                      type="button"
                       onClick={() => handleFeatureClick(feature.type)}
                       className="group relative overflow-hidden rounded-2xl border border-border bg-card p-6 text-left transition-all hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5"
                     >
