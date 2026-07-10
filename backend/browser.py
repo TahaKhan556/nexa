@@ -49,10 +49,18 @@ async def _cdp_send(method: str, params: dict = None) -> dict:
 
     targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/list").read())
     ws_url = None
+    # Prefer notebook pages over homepage
     for t in targets:
-        if "notebooklm" in t.get("url", "").lower():
+        url = t.get("url", "")
+        if t.get("type") == "page" and "/notebook/" in url and "notebooklm" in url.lower():
             ws_url = t.get("webSocketDebuggerUrl")
             break
+    if not ws_url:
+        # Fallback: any notebooklm page
+        for t in targets:
+            if "notebooklm" in t.get("url", "").lower():
+                ws_url = t.get("webSocketDebuggerUrl")
+                break
     if not ws_url:
         info = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP_PORT}/json/version").read())
         ws_url = info.get("webSocketDebuggerUrl")
@@ -82,7 +90,7 @@ async def chat_with_notebooklm(prompt: str, notebook_id: str = None, timeout: in
         else:
             notebook_url = NOTEBOOK_URL
 
-        # Navigate to notebook and wait for it to load
+        # Navigate to notebook
         for attempt in range(5):
             url = await _cdp_eval("window.location.href")
             logger.info(f"URL: {url}")
@@ -93,9 +101,9 @@ async def chat_with_notebooklm(prompt: str, notebook_id: str = None, timeout: in
             elif "/notebook/" in url and not notebook_id:
                 break
 
-            # Navigate to notebook
-            await _cdp_eval(f"window.location.href = '{notebook_url}'")
-            time.sleep(3)
+            # Use CDP Page.navigate (works with SPAs)
+            await _cdp_send("Page.navigate", {"url": notebook_url})
+            time.sleep(8)
         else:
             return "Not in a notebook."
 
@@ -162,8 +170,8 @@ async def chat_with_notebooklm(prompt: str, notebook_id: str = None, timeout: in
             time.sleep(2)
             text = await _cdp_eval("document.body.innerText")
 
-            # Get the last 3000 chars
-            recent = text[-3000:] if len(text) > 3000 else text
+            # Get the last 10000 chars (longer responses)
+            recent = text[-10000:] if len(text) > 10000 else text
             lines = recent.split("\n")
 
             # Find the prompt in the page
@@ -179,22 +187,22 @@ async def chat_with_notebooklm(prompt: str, notebook_id: str = None, timeout: in
             response_lines = []
             for line in lines[prompt_pos + 1:]:
                 line = line.strip()
-                if not line or len(line) < 10:
+                if not line or len(line) < 5:
                     continue
                 # Skip UI elements
-                if any(skip in line.lower() for skip in ["settings", "create notebook", "source", "menu", "search", "featured", "jump to bottom", "thumb", "copy", "rate", "scrolls", "arrow_forward", "thinking...", "loading...", "reply ready.", "since your notebook"]):
+                if any(skip in line.lower() for skip in ["settings", "create notebook", "source", "menu", "search", "featured", "jump to bottom", "thumb", "copy", "rate", "scrolls", "arrow_forward", "thinking...", "loading...", "reply ready.", "since your notebook", "considering...", "exploring...", "analyzing...", "processing...", "generating...", "more_horiz", "save to note", "share", "export"]):
                     continue
                 response_lines.append(line)
 
             if response_lines:
-                candidate = "\n".join(response_lines[:5])
+                candidate = "\n".join(response_lines)
                 if len(candidate) > len(last_text):
                     last_text = candidate
                     stable_count = 0
                 else:
                     stable_count += 1
 
-                if stable_count >= 2 and len(last_text) > 30:
+                if stable_count >= 3 and len(last_text) > 30:
                     return last_text
 
         return last_text or "Could not capture response."

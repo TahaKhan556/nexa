@@ -76,7 +76,15 @@ async def refine_prompt(user_message: str) -> dict:
 
             # Parse JSON response
             try:
-                result = json.loads(content)
+                # Strip markdown code blocks if present
+                clean = content
+                if "```" in clean:
+                    # Extract content between ``` markers
+                    import re
+                    match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', clean, re.DOTALL)
+                    if match:
+                        clean = match.group(1).strip()
+                result = json.loads(clean)
                 notebook_id = result.get("notebook_id", NOTEBOOKS[0]["id"] if NOTEBOOKS else "")
                 query = result.get("query", user_message)
                 logger.info(f"Hermes refined: notebook={notebook_id[:8]}... query='{query[:60]}...'")
